@@ -1,0 +1,101 @@
+# This is the basic workflow to build draft documentation
+
+name: Snapshot Build
+## This section contains ALL variable specific for this project ##
+# The VERSION is the main release number i.e. 1.7 or 2.1
+env:
+  BUILD_NAME:           ICS-JDF-WIDEFORMAT
+  DOCUMENT_VERSION:     '1.7'
+  DOCUMENT_FILE_NAME:   ICS JDF Wide Format
+  CONFIG_FILE:          Build\ICS_JDF_WideFormat.ini
+  CONFLUENCE_ID:        '15663320'
+  CONFLUENCE_LABELS:    'ics-jdf-wideformat,ics-draft'
+  
+  DOCUMENT_COPYRIGHT:   'CIP4 Organization, all rights reserved'
+
+  BUILD_UTILITY_EXE: c:\actions-runner\_work\_tool\document-processing\document-processing.exe  
+
+## The remaining section SHOULD be common to all draft documentation builds
+# Controls when the action will run
+on:
+  push:
+    branches: [ master ]
+
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: 'Manual Run'  
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  build:
+    runs-on: [framemaker-2020]
+    
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # For access to other Git repositories - an access token is required. 
+      - name: Get GitHub Access Token
+        id: access_token
+        uses: tibdex/github-app-token@v1
+        with:
+          app_id: ${{ secrets.CIP4_GITHUB_ACTIONS_APP_ID }}
+          private_key: ${{ secrets.CIP4_GITHUB_ACTIONS_APP_KEY }} 
+      
+      # Clean up working directory
+      - name: Clean up working directory
+        run:  rm -r -fo *
+        
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - name: Checkout source
+        uses: actions/checkout@v2
+        with:
+          path: document
+
+      # Check out the build scripts
+      - name: Checkout build scripts
+        uses: actions/checkout@v2
+        with:
+          repository: cip4/cip4-document-builder
+          token: ${{ steps.access_token.outputs.token }}
+          path: builder
+
+      # Build the document parameters
+      - name: Build Document
+        timeout-minutes: 30
+        run: >
+          python ..\builder\scripts\specbuilder.py $env:CONFIG_FILE
+          "$env:DOCUMENT_FILE_NAME $env:DOCUMENT_VERSION DRAFT-$((Get-Date).ToString('yyyyMMdd')) Build-$env:GITHUB_RUN_NUMBER"
+          "$env:DOCUMENT_VERSION DRAFT-$((Get-Date).ToString('yyyyMMdd')) Build-$env:GITHUB_RUN_NUMBER"
+          "Run-$env:GITHUB_RUN_NUMBER"
+        working-directory: ./document
+        
+      # Mark pages with draft watermark
+      - name: Watermark pages
+        run: >
+          ${{ env.BUILD_UTILITY_EXE }} draft "$env:DOCUMENT_FILE_NAME*.pdf"
+        working-directory: ./document/target
+        
+      # Update document properties copyright
+      - name: Update copyright
+        run: >
+          ${{ env.BUILD_UTILITY_EXE }} info "$env:DOCUMENT_FILE_NAME*.pdf"
+          --copyright "$((Get-Date).ToString('MMMM yyyy')) $env:DOCUMENT_COPYRIGHT"
+        working-directory: ./document/target
+
+      # Upload any artefact produced.
+      - name: Upload Document
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ env.BUILD_NAME }}-artifact
+          path: document/target/*.pdf
+          
+      # Upload to Confluence
+      - name: Confluence Upload
+        uses: cip4/action-confluence-upload@master
+        with:
+          url: 'https://confluence.cip4.org'
+          username: ${{ secrets.CONFLUENCE_USER }}
+          password: ${{ secrets.CONFLUENCE_PASSWORD }}
+          contentId: ${{ env.CONFLUENCE_ID }}
+          label: ${{ env.CONFLUENCE_LABELS }}
+          filePattern: 'document/target/*.pdf'

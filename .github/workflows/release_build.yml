@@ -1,0 +1,96 @@
+# This is the basic workflow to build release documentation
+
+name: Release Build
+## This section contains ALL variable specific for this project ##
+# The VERSION is the main release number i.e. 1.7 or 2.1
+env:
+  BUILD_NAME:           ICS-JDF-WIDEFORMAT
+  DOCUMENT_VERSION:     '1.7'
+  DOCUMENT_FILE_NAME:   ICS JDF Wide Format
+  CONFIG_FILE:          Build\ICS_JDF_WideFormat.ini
+  CONFLUENCE_ID:        '15663320'
+  CONFLUENCE_LABELS:    'ics-jdf-wideformat,milestone'
+  
+  DOCUMENT_COPYRIGHT:   'CIP4 Organization, all rights reserved'
+
+  BUILD_UTILITY_EXE: c:\actions-runner\_work\_tool\document-processing\document-processing.exe   
+
+## The remaining section SHOULD be common to all draft documentation builds
+# Controls when the action will run
+on:
+  push:
+    tags:
+      - '*'
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  build:
+    runs-on: [framemaker-2020]
+    
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # For access to other Git repositories - an access token is required. 
+      - name: Get GitHub Access Token
+        id: access_token
+        uses: tibdex/github-app-token@v1
+        with:
+          app_id: ${{ secrets.CIP4_GITHUB_ACTIONS_APP_ID }}
+          private_key: ${{ secrets.CIP4_GITHUB_ACTIONS_APP_KEY }} 
+      
+      # Clean up working directory
+      - name: Clean up working directory
+        run:  rm -r -fo *
+        
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - name: Checkout source
+        uses: actions/checkout@v2
+        with:
+          path: document
+
+      # Check out the build scripts
+      - name: Checkout build scripts
+        uses: actions/checkout@v2
+        with:
+          repository: cip4/cip4-document-builder
+          token: ${{ steps.access_token.outputs.token }}
+          path: builder
+
+      - name: Build Document
+        timeout-minutes: 30
+        run: >
+          python ..\builder\scripts\specbuilder.py $env:CONFIG_FILE
+          "$env:DOCUMENT_FILE_NAME $(${env:GITHUB_REF}.replace('refs/tags/',''))"
+          "Release $(${env:GITHUB_REF}.replace('refs/tags/',''))"
+          "Run-$env:GITHUB_RUN_NUMBER"
+        working-directory: ./document
+        
+      # Update document properties copyright
+      - name: Update copyright
+        run: >
+          ${{ env.BUILD_UTILITY_EXE }} info "$env:DOCUMENT_FILE_NAME*.pdf"
+          --copyright "$((Get-Date).ToString('MMMM yyyy')) $env:DOCUMENT_COPYRIGHT"
+        working-directory: ./document/target
+
+      # Upload any artefact produced.
+      - name: Upload Document
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ env.BUILD_NAME }}-artifact
+          path: document/target/*.pdf
+
+      # Generate full Confluence Labels List
+      - name: Generate Full Confluence Labels List
+        run: >
+          echo "FULL_CONFLUENCE_LABELS=${env:CONFLUENCE_LABELS},$(${env:GITHUB_REF}.replace('refs/tags/',''))" | 
+          Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          
+      # Upload to Confluence
+      - name: Confluence Upload
+        uses: cip4/action-confluence-upload@master
+        with:
+          url: 'https://confluence.cip4.org'
+          username: ${{ secrets.CONFLUENCE_USER }}
+          password: ${{ secrets.CONFLUENCE_PASSWORD }}
+          contentId: ${{ env.CONFLUENCE_ID }}
+          label:    ${{ env.FULL_CONFLUENCE_LABELS }}
+          filePattern: 'document/target/*.pdf'
